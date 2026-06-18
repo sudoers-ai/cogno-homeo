@@ -22,7 +22,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Lint (ruff)
-        run: ruff check cogno_homeo tests
+        run: ruff check cogno_homeo tests examples
       - name: Type-check (mypy)
         run: mypy cogno_homeo
       - name: Unit tests

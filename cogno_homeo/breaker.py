@@ -15,10 +15,15 @@ injectable ``now`` (so tests can advance time deterministically).
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional, Protocol, runtime_checkable
+
+# DEBUG-only: the breaker's operational signal is consumed via the MetricsSink in
+# core.py; this just traces state transitions during development.
+logger = logging.getLogger(__name__)
 
 
 class BreakerStatus(str, Enum):
@@ -85,12 +90,16 @@ class CircuitBreaker:
         if self._now() - (st.opened_at or 0.0) >= self.cooldown_s:
             st.status = BreakerStatus.HALF_OPEN
             self.store.set(key, st)
+            logger.debug("event=breaker_transition key=%s from=open to=half_open", key)
             return False
         return True
 
     def record_success(self, key: str) -> None:
         """A successful call closes the breaker and resets the failure count."""
+        prev = self.store.get(key)
         self.store.set(key, BreakerState())
+        if prev.status != BreakerStatus.CLOSED:
+            logger.debug("event=breaker_transition key=%s from=%s to=closed", key, prev.status.value)
 
     def record_failure(self, key: str) -> None:
         """A failed call. A failed half-open trial reopens immediately; otherwise
@@ -100,9 +109,16 @@ class CircuitBreaker:
             st.status = BreakerStatus.OPEN
             st.opened_at = self._now()
             st.failures += 1
+            logger.debug("event=breaker_transition key=%s from=half_open to=open", key)
         else:
+            was_open = st.status == BreakerStatus.OPEN
             st.failures += 1
             if st.failures >= self.fail_threshold:
                 st.status = BreakerStatus.OPEN
                 st.opened_at = self._now()
+                if not was_open:
+                    logger.debug(
+                        "event=breaker_transition key=%s from=closed to=open fails=%d",
+                        key, st.failures,
+                    )
         self.store.set(key, st)

@@ -77,3 +77,21 @@ def test_injected_store_is_used():
     cb = CircuitBreaker(fail_threshold=1, store=store)
     cb.record_failure("k")
     assert store.get("k").status == BreakerStatus.OPEN
+
+
+def test_transitions_logged_at_debug(caplog):
+    import logging
+    clock = FakeClock()
+    cb = CircuitBreaker(fail_threshold=2, cooldown_s=30.0, now=clock)
+    with caplog.at_level(logging.DEBUG, logger="cogno_homeo.breaker"):
+        cb.record_failure("openai")                 # 1st — no transition yet
+        cb.record_failure("openai")                 # 2nd → closed→open (logged once)
+        clock.advance(31.0)
+        cb.is_open("openai")                         # open→half_open (logged)
+        cb.record_success("openai")                 # half_open→closed (logged)
+    transitions = [r.message for r in caplog.records if "breaker_transition" in r.message]
+    assert any("to=open" in m for m in transitions)
+    assert any("to=half_open" in m for m in transitions)
+    assert any("to=closed" in m for m in transitions)
+    # the single failure below threshold must NOT have emitted a transition
+    assert len(transitions) == 3

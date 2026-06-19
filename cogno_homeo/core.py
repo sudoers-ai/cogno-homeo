@@ -22,12 +22,17 @@ eligible (empty list / all breaker-open), ``NoCandidateAvailable`` is raised.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Awaitable, Callable, Optional, Sequence, TypeVar
 
 from cogno_homeo.breaker import CircuitBreaker
 from cogno_homeo.metrics import AttemptRecord, MetricsSink, NullMetricsSink
 from cogno_homeo.retry import RetryPolicy
+
+# Operational state (breaker transitions, failover, retries) is reported through
+# the structured MetricsSink seam — logging here is DEBUG-only human tracing.
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -60,6 +65,7 @@ async def resilient_call(
     for candidate in candidates:
         k = key(candidate)
         if breaker is not None and breaker.is_open(k):
+            logger.debug("event=skip_breaker_open key=%s", k)
             continue
         tried_any = True
 
@@ -75,6 +81,10 @@ async def resilient_call(
                 _record(sink, k, False, t0, retry_index, str(exc))
                 if breaker is not None:
                     breaker.record_failure(k)
+                logger.debug(
+                    "event=attempt key=%s ok=false retry_index=%d latency_ms=%.1f error=%s",
+                    k, retry_index, (time.perf_counter() - t0) * 1000.0, exc,
+                )
                 continue
 
             if not is_success(result):
@@ -83,11 +93,19 @@ async def resilient_call(
                 _record(sink, k, False, t0, retry_index, "rejected_by_is_success")
                 if breaker is not None:
                     breaker.record_failure(k)
+                logger.debug(
+                    "event=attempt key=%s ok=false retry_index=%d latency_ms=%.1f "
+                    "error=rejected_by_is_success", k, retry_index, (time.perf_counter() - t0) * 1000.0,
+                )
                 break
 
             _record(sink, k, True, t0, retry_index, None)
             if breaker is not None:
                 breaker.record_success(k)
+            logger.debug(
+                "event=attempt key=%s ok=true retry_index=%d latency_ms=%.1f",
+                k, retry_index, (time.perf_counter() - t0) * 1000.0,
+            )
             return result
 
     if not tried_any:

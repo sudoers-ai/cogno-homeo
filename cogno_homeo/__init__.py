@@ -8,6 +8,15 @@ agnostic: it knows nothing about LLMs or audio, so both cogno-synapse (text) and
 cogno-vox (audio) build their fallback chains on the same kernel.
 """
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _dist_version
+
+try:
+    __version__ = _dist_version("cogno-homeo")
+except PackageNotFoundError:  # source tree without an installed dist (e.g. vendored checkout)
+    __version__ = "0.0.0"
+
+
 from cogno_homeo.breaker import (
     BreakerState,
     BreakerStatus,

@@ -1,6 +1,6 @@
 [project]
 name = "cogno-homeo"
-version = "0.1.0"
+version = "0.1.1"
 description = "Autonomic resilience kernel for the Cogno cognitive pipeline — circuit breaker, retry/backoff, and a metrics seam behind a signature-agnostic fallback executor"
 readme = "README.md"
 requires-python = ">=3.10"

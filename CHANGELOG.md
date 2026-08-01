@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 — 2026-07-31
+
+- No functional changes. First release published via the tag-driven trusted-publishing
+  workflow (GitHub Actions OIDC) — validates the token-less release pipeline end to end.
+
 ## 0.1.0 — 2026-07-25
 
 First public release on PyPI.

@@ -18,7 +18,7 @@ cogno-vox ─────┘
 
 The specialized edge depends on the generic kernel — never the other way around.
 
-## The four pieces
+## The pieces
 
 | Piece | What it does |
 | --- | --- |
@@ -26,6 +26,7 @@ The specialized edge depends on the generic kernel — never the other way aroun
 | `RetryPolicy` | full-jitter exponential backoff (pure math; the sleep happens in the executor). |
 | `MetricsSink` (Protocol) | reliability telemetry seam — one `AttemptRecord` per attempt. Host plugs Prometheus/logs; default discards. |
 | `resilient_call(...)` | the signature-agnostic executor that composes the three over an ordered candidate list. |
+| `LeaderLane` | a single-consumer lane: ONE leader in the deployment drains a shared queue, one job at a time, each under a deadline that gives the lane up when it passes. Lock, queue and heartbeat behind the `LeadershipLock` / `JobQueue` / `Heartbeat` ports. |
 
 ## `resilient_call` — one executor, any signature
 
@@ -58,6 +59,32 @@ CircuitBreaker(store=RedisStateStore(redis_client))
 ```
 
 The breaker **key is an opaque string the host composes** — e.g. `openai:global` for a shared key vs `openai:byok:{tenant}` to isolate a tenant's own credential so one bad key can't trip the breaker for everyone. `cogno-homeo` never interprets it.
+
+## `LeaderLane` — one consumer in the deployment
+
+For background work that must never run twice at once because what it spends is the whole
+deployment's (a model server, a provider rate limit, a paid API): any process may push a job,
+exactly one drains — whichever holds the lane's leadership lock.
+
+```python
+from cogno_homeo import LeaderLane
+
+lane = LeaderLane(queue=q, lock=q, heartbeat=q,          # one adapter may be all three ports
+                  work=do_one_job,                       # ONE job
+                  deadline=seconds_for,                  # how long THIS job may take
+                  on_timeout=mark_interrupted)           # undo, before the lock is released
+await lane.run()                                         # drains only while it leads
+```
+
+The four guarantees: **one leader** (only the lock's holder drains; a process that dies drops
+its lock and the next one continues from the queue); **one job at a time, oldest first**,
+removed once it ran; **a visible heartbeat** naming the leader and the running job, so a leader
+that hung without dying shows as a stale beat over waiting jobs (`cogno_homeo.lane.stalled`);
+and **a deadline per job that gives the lane UP** — the overrun job is cancelled without being
+awaited, the host undoes, the lock is released and this lane waits before asking again, so a
+hung leader cannot keep the lane. The durable adapter (a table, a session advisory lock, a beat
+row) is the host's, like the breaker's shared `StateStore`; `InMemoryLaneQueue` + `Lease` are
+the in-process double. See [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md) §6.
 
 ## Install
 

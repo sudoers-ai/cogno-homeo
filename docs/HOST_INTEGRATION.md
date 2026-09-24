@@ -21,6 +21,8 @@ holds no I/O. This is the human-facing companion to `examples/host_min.py`.
 | Where breaker state lives (in-process vs shared) via `StateStore` | **host** |
 | Telemetry destination via `MetricsSink` | **host** |
 | Token/cost accounting | **host** (NOT here — the result is opaque to the kernel) |
+| The single-consumer lane's loop: one leader, one job at a time, heartbeat, per-job deadline that gives the lane up | **kernel** (`LeaderLane`) |
+| What a job IS, how long it may take, what a timeout must undo, where the queue/lock/beat live | **host** (callbacks + the three lane ports) |
 
 ---
 
@@ -101,3 +103,66 @@ class MetricsSink(Protocol):
 This is **ops** telemetry. The kernel never sees tokens or cost — the result of
 an attempt is opaque to it. Token accounting belongs where the data is produced
 (the LLM/audio backends) and is priced by the host.
+
+---
+
+## 6. A single-consumer lane (`LeaderLane`)
+
+For background work that must never run twice AT ONCE because what it spends belongs to the
+whole deployment — a model server shared with live traffic, a provider's rate limit, a paid API.
+"One job per process" with N workers is N jobs at once; the lane makes it one per deployment:
+any process may **push**, exactly one **drains** — whichever holds the lane's leadership lock.
+
+```python
+from cogno_homeo import LeaderLane
+from cogno_homeo.lane import stalled
+
+lane = LeaderLane(
+    queue=store, lock=store, heartbeat=store,  # the three ports — one adapter may be all of them
+    work=do_one_job,                           # async: ONE job
+    deadline=seconds_for,                      # async: how long THIS job may take (asked first)
+    parse=Job.from_row,                        # optional: a row → your job type
+    label=lambda job: job.item_id,             # optional: names the running job on the beat
+    kinds=runnable_kinds,                      # optional: which kinds may run NOW (None = any)
+    on_result=..., on_error=...,               # a job that finished / raised
+    on_timeout=mark_interrupted,               # async: undo an overrun job, BEFORE the release
+    on_beat_error=...,                         # a beat that failed (a stale lane, not a crash)
+    housekeeping=sweep, beat_s=10.0,           # optional: the leader's periodic chores
+)
+await lane.run(poll_s=2.0, lead_retry_s=30.0, housekeeping_s=300.0)
+```
+
+**The four guarantees** (each pinned in `tests/unit/test_lane.py`):
+
+1. **One leader.** Only the holder of the `LeadershipLock` drains. `lead()` takes the lock when
+   nobody holds it and CONFIRMS it when this holder already does — a holder whose lock was lost
+   behind its back (with its connection, say) must answer `False`, never a remembered `True`.
+2. **One job at a time, oldest first,** removed once it RAN — succeeded, raised or timed out. A
+   job is tried once; to retry, push it again. `kinds()` holds some kinds back (a budget that ran
+   out) without dropping them.
+3. **A visible heartbeat.** The leader beats every loop and every `beat_s` during a job, naming
+   the job. `stalled(queued=..., beat_age_s=..., stale_after_s=...)` is the predicate for a health
+   page: jobs waiting under a missing or stale beat — a leader that hung WITHOUT dying and still
+   holds its lock, which a lock alone can never reveal. An empty queue is never stalled.
+4. **A deadline per job that gives the lane UP.** The overrun job is cancelled WITHOUT being
+   awaited (a driver that ignores the cancel would otherwise hold the lane exactly as long as it
+   hangs), `on_timeout` runs, and the lock is released — also when `on_timeout` raises. `run()`
+   then waits `lead_retry_s` before asking again, so another process takes over.
+
+`run()` releases the lock on its way out, cancellation included, so the next process does not
+wait for this one's connection to time out. A `housekeeping` that raises ends `run()` (and
+releases the lock) — it owns its errors.
+
+**The ports are the host's, and so is the durable adapter** — the same boundary as the breaker's
+`StateStore` (§4): the kernel stays pure. A Postgres adapter, for instance, is a table of rows
+(with a UNIQUE key, so a push that races itself is one job), a **session** advisory lock taken
+with `pg_try_advisory_lock` on a connection kept for as long as it leads (the lock dies with the
+connection, which is exactly the "a process that dies drops its lock" guarantee — so `lead()`
+must check that connection is alive before answering `True`), and a one-row beat table.
+`InMemoryLaneQueue` (over a shared `Lease` and a shared `rows` list, handles compete like
+processes) is the in-process double, with `unique=` as the UNIQUE key.
+
+The **deadline's value** is the host's too: the kernel cannot know what a job weighs. Keep it
+under whatever sweep declares a job's work abandoned, or the sweep will end a job that is still
+running.
+

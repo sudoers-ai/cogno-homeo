@@ -28,3 +28,8 @@ pluga seu backend (Loki/Datadog/Prometheus) no `MetricsSink` e recebe esses
 eventos como métricas. O `logging` aqui é **só DEBUG humano** (rastrear uma
 tentativa individual durante desenvolvimento); não há WARNING/INFO duplicando o
 que o `MetricsSink` já entrega.
+
+O `LeaderLane` (`cogno_homeo.lane`) segue a mesma regra: o que é operacional — um
+job que levantou, um prazo que passou, uma batida que falhou — chega ao host pelos
+callbacks `on_error` / `on_timeout` / `on_beat_error`, e é o host que decide o
+nível e o nome do evento. Os defaults desses callbacks só escrevem DEBUG.

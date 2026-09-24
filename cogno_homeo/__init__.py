@@ -6,6 +6,11 @@ stress. Pure code, zero dependencies, zero I/O — it orchestrates calls (circui
 breaker + retry/backoff + a metrics seam) but never makes one itself. Domain
 agnostic: it knows nothing about LLMs or audio, so both cogno-synapse (text) and
 cogno-vox (audio) build their fallback chains on the same kernel.
+
+``cogno_homeo.lane`` is the same idea for background work: a single-consumer lane
+whose ONE leader drains a shared queue, one job at a time, each under a deadline
+that gives the lane up when it passes — behind ports for the leadership lock, the
+queue and the heartbeat, whose durable adapters are the host's.
 """
 
 from importlib.metadata import PackageNotFoundError
@@ -25,6 +30,14 @@ from cogno_homeo.breaker import (
     StateStore,
 )
 from cogno_homeo.core import NoCandidateAvailable, resilient_call
+from cogno_homeo.lane import (
+    Heartbeat,
+    InMemoryLaneQueue,
+    JobQueue,
+    LeaderLane,
+    LeadershipLock,
+    Lease,
+)
 from cogno_homeo.metrics import AttemptRecord, MetricsSink, NullMetricsSink
 from cogno_homeo.retry import RetryPolicy
 
@@ -40,4 +53,10 @@ __all__ = [
     "MetricsSink",
     "NullMetricsSink",
     "AttemptRecord",
+    "LeaderLane",
+    "LeadershipLock",
+    "JobQueue",
+    "Heartbeat",
+    "Lease",
+    "InMemoryLaneQueue",
 ]

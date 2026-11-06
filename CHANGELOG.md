@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2 — 2026-11-06 — release to PyPI of the changes below
+
+Publishes every «Unreleased» entry below, merged since 0.1.1. No change of its own.
+
 ## Unreleased — the single-consumer lane moves here from the reference host (2026-09-24)
 
 ### Added
